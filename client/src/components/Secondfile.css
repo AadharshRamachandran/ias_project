@@ -1,0 +1,75 @@
+@import url("https://fonts.googleapis.com/css2?family=Cabin:wght@700&family=Roboto+Mono:wght@100&display=swap");
+
+*{ margin:0; padding:0; box-sizing:border-box }
+
+.file-container{
+  background: linear-gradient(180deg, rgba(3,7,18,0.6), rgba(3,7,18,0.45)), url("./images/herobg-min.png");
+  background-repeat:no-repeat; background-size:cover; background-position:center;
+  margin-top: 84px; padding-bottom:28px;
+}
+
+.file-container h1{ color:var(--text); font-family:"Baloo Thambi 2",cursive; font-size:2.4rem; padding-top:72px; text-align:center }
+
+.brief-detail{ max-width:1100px; margin:18px auto; padding:22px; border-radius:12px; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); box-shadow:var(--shadow); }
+
+.brief-head{ font-family:"Poppins",sans-serif; letter-spacing:4px; font-size:1.9rem; margin-bottom:10px }
+
+.search-bar{ display:flex; gap:12px; align-items:center; margin:12px auto; width:min(640px,90%)}
+.search-bar input{ flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.06); background:transparent; color:var(--text) }
+.search-bar button{ padding:10px 16px; border-radius:10px; border:none; background:linear-gradient(90deg,var(--accent-2),var(--accent)); color:#04121a }
+
+.image-grid{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap:20px;
+  max-width:1100px;
+  margin:18px auto;
+  padding:18px;
+  border-radius:12px;
+  background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);
+  border:1px solid rgba(255,255,255,0.03);
+  min-height:240px;
+  position: relative;
+}
+
+.image-grid .image-container{ background: linear-gradient(90deg, rgba(122,91,255,0.06), rgba(0,229,196,0.02)); border-radius:10px; overflow:hidden; position:relative; height:220px; display:flex; align-items:center; justify-content:center }
+.image-grid .image-container .image-list{ width:100%; height:100%; object-fit:cover; display:block }
+
+.image-grid .image-placeholder{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:14px }
+
+.container{ display:flex; gap:20px; justify-content:center; align-items:flex-start; max-width:1100px; margin:10px auto }
+
+.card{ background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border-radius:14px; padding:18px; box-shadow:var(--shadow); width:100%; max-width:320px; display:flex; flex-direction:column; gap:8px; min-height:330px }
+.card img{ width:72px; height:72px; border-radius:12px }
+.card h3{ font-size:1.4rem; font-weight:700 }
+.card p{ color:var(--muted); font-size:0.98rem }
+.card .btn{ margin-top:auto; padding:10px 16px; border-radius:12px; background:linear-gradient(90deg,var(--accent-2),var(--accent)); color:#04121a; font-weight:700 }
+
+.upload-check-section{ margin:28px 0 60px; min-height:520px; padding:28px 0; background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent); border-radius:12px }
+.check-head{ font-family:"Poppins",sans-serif; font-size:1.8rem; color:var(--text); text-align:center; margin-top:12px }
+.check-para{ color:var(--muted); max-width:56ch; margin:12px auto; text-align:center }
+
+.image-container{ position:relative }
+.delete-button{ display:none; position:absolute; top:8px; right:8px; background:rgba(2,6,12,0.7); border-radius:50%; width:36px; height:36px; display:flex; align-items:center; justify-content:center; border:none; color:#fff; cursor:pointer }
+.image-container:hover .delete-button{ display:flex }
+.delete-button i{ color:#fff }
+
+/* simplified close control for the gallery view */
+.close-container{ position: absolute; top:12px; right:12px; background: rgba(0,0,0,0.35); border: none; color: var(--muted); width:40px; height:40px; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer }
+.close-container i{ font-size:18px; color:var(--muted) }
+.close-container:hover{ background: rgba(255,255,255,0.02); color: var(--accent); }
+
+/* file action buttons (open/download) inside each tile */
+.file-actions{ position: absolute; bottom:12px; left:50%; transform:translateX(-50%); display:flex; gap:8px }
+.file-actions a{ padding:8px 10px; border-radius:10px; text-decoration:none; font-size:0.95rem; color:var(--text); background: rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.03); display:inline-flex; align-items:center; justify-content:center; width:44px; height:36px }
+.file-actions a i{ font-size:15px }
+.file-actions a.open-link{ color:#04121a; background: linear-gradient(90deg,var(--accent-2),var(--accent)); border:none }
+.file-actions a.download-link{ color:var(--text); opacity:0.95; background: rgba(255,255,255,0.02) }
+
+/* placeholder for non-previewable files */
+.image-placeholder{ width:100%; height:100%; display:none; align-items:center; justify-content:center; }
+.image-placeholder .placeholder-inner{ display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted) }
+.placeholder-text{ font-size:0.95rem; margin-top:6px }
+
+@media (max-width:880px){ .container{ flex-direction:column; align-items:center } .file-container h1{ padding-top:48px } }
+

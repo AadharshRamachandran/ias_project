@@ -1,0 +1,73 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans&display=swap');
+
+body {
+    background: linear-gradient(180deg, var(--bg), #000000);
+}
+
+.Work-heading {
+    font-size: 2rem;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    color: var(--text);
+    margin-top: 90px;
+    text-align: center;
+    font-weight:700;
+}
+
+.first-section {
+    display: flex;
+    flex-direction: row;
+    max-width: 90%;
+    margin: auto;
+    margin-top: 10px;
+}
+
+.first-para ,.second-para ,.third-para{
+    font-size: 1.05rem;
+    line-height: 1.7;
+    font-family: 'Nunito', sans-serif;
+    color: var(--muted);
+    max-width: 44em;
+    margin-left: 36px;
+    margin-top: 22px;
+}
+
+.image-1 ,.image-2 ,.image-3{
+    margin-top: 30px;
+}
+
+.image-1 img ,.image-2 img  , .image-3 img{
+    max-width: 100%;
+    object-fit: contain;
+}
+
+.image-2{
+    max-width: 50%;
+}
+
+
+.second-section {
+    display: flex;
+    flex-direction: row-reverse;
+    max-width: 90%;
+    margin: auto;
+    margin-top: 40px;
+    align-items: center;
+    justify-content: center;
+}
+
+
+.third-section {
+    display: flex;
+    flex-direction: row;
+    max-width: 90%;
+    margin: auto;
+    margin-top: 40px;
+    margin-bottom: 5rem;
+}
+@media (max-width: 900px){
+    .first-section, .second-section, .third-section{ flex-direction: column; gap: 18px; padding: 0 18px }
+    .image-2{ max-width: 100%; }
+    .first-para, .second-para, .third-para{ margin-left: 0; padding: 0 }
+}
+
+
