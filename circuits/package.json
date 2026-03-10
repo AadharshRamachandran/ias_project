@@ -1,0 +1,13 @@
+{
+    "name": "circuits",
+    "version": "1.0.0",
+    "description": "Circom ZKP circuits for file integrity and access proof",
+    "private": true,
+    "scripts": {
+        "compile": "bash compile.sh",
+        "install-deps": "npm install"
+    },
+    "dependencies": {
+        "circomlib": "^2.0.5"
+    }
+}
