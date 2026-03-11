@@ -3,6 +3,7 @@ import FileRegistryABI from "../../../blockchain/artifacts/contracts/FileRegistr
 import AccessControlABI from "../../../blockchain/artifacts/contracts/AccessControl.sol/FileAccessControl.json";
 import TimeBoundPermissionsABI from "../../../blockchain/artifacts/contracts/TimeBoundPermissions.sol/TimeBoundPermissions.json";
 import GDPRComplianceABI from "../../../blockchain/artifacts/contracts/GDPRCompliance.sol/GDPRCompliance.json";
+import ZKPVerifierABI from "../../../blockchain/artifacts/contracts/ZKPVerifier.sol/ZKPVerifier.json";
 // Fallback if addresses file wasn't generated correctly by deploy.js yet
 import Addresses from "../contracts/addresses.json";
 
@@ -70,6 +71,10 @@ export async function getTimeBoundPermissions(signer) {
 
 export async function getGDPRCompliance(signer) {
     return getContract(CONTRACTS.GDPRCompliance, GDPRComplianceABI, signer);
+}
+
+export async function getZKPVerifier(signer) {
+    return getContract(CONTRACTS.ZKPVerifier, ZKPVerifierABI, signer);
 }
 
 export async function signAuthMessage(signer) {

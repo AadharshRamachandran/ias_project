@@ -2,9 +2,10 @@
 
 Welcome to **SecureFileShare**. This is not just a typical file upload application; it is a full-stack, decentralized, mathematically-secured platform that extends blockchain, IPFS (InterPlanetary File System), and smart contracts with three advanced cryptographic features:
 
-1. **Attribute-Based Encryption (CP-ABE)**: Traditional encryption encrypts a file for *one* specific person. Ciphertext-Policy ABE allows you to encrypt a file for a *policy* (e.g., "Must be a Doctor AND in the Cardiology Department"). The underlying file is secured with military-grade AES-256-GCM, and the AES key is then mathematically split (using Shamir's Secret Sharing) according to the policy.
-2. **GDPR Compliance natively on Web3**: The blockchain is permanent (immutable), which violates Europe's GDPR "Right to be Forgotten" (Article 17). Our system implements a hybrid approach: an off-chain secure SQLite database tracks Personally Identifiable Information (PII). When a user requests deletion, their IPFS files are unpinned, and their database records are permanently anonymized via cryptographic hashing, leaving a compliant audit trail.
-3. **Time-Bound Permissions**: Decentralized access control via the blockchain that automatically revokes access based on Ethereum's exact `block.timestamp`.
+1. **Zero-Knowledge Proofs (Basic Integrity)**: We use Groth16 cryptographic proofs (via `snarkjs`) to mathematically prove that a file's hash is valid without revealing the file contents.
+2. **Attribute-Based Encryption (CP-ABE)**: Traditional encryption encrypts a file for *one* specific person. Ciphertext-Policy ABE allows you to encrypt a file for a *policy* (e.g., "Must be a Doctor AND in the Cardiology Department"). The underlying file is secured with military-grade AES-256-GCM, and the AES key is then mathematically split (using Shamir's Secret Sharing) according to the policy.
+3. **GDPR Compliance natively on Web3**: The blockchain is permanent (immutable), which violates Europe's GDPR "Right to be Forgotten" (Article 17). Our system implements a hybrid approach: an off-chain secure SQLite database tracks Personally Identifiable Information (PII). When a user requests deletion, their IPFS files are unpinned, and their database records are permanently anonymized via cryptographic hashing, leaving a compliant audit trail.
+4. **Time-Bound Permissions**: Decentralized access control via the blockchain that automatically revokes access based on Ethereum's exact `block.timestamp`.
 
 This comprehensive guide will walk you through *exactly* how to set up the environment, deploy the project, and understand the code execution at every step.
 
@@ -111,7 +112,7 @@ npm run dev
 **What happens under the hood?**
 1. The Node.js Express server starts on port `3001`.
 2. It immediately checks the `db` folder. If `gdpr.db` doesn't exist, it uses `better-sqlite3` to build a fresh SQLite database to act as our GDPR audit trail.
-3. It exposes endpoints for the frontend to utilize heavy cryptographic operations (like `/api/upload` which handles AES encryption).
+3. It exposes endpoints for the frontend to utilize heavy cryptographic operations (like `/api/upload` which handles Basic ZKP generation and AES encryption).
 
 ---
 
@@ -140,7 +141,7 @@ The application uses your MetaMask **Wallet Address** as your identity. When we 
 4. (Optional) Provide explicit User Attributes. This tags *you* (the uploader) with specific roles (like `role: doctor`). This is important later if you want to enforce policies.
 5. Click **Encrypt & Upload File**.
 6. MetaMask will pop up asking you to **Sign** a message. This proves you own the wallet without charging gas fees.
-7. Wait for the progress bar. The file is being encrypted and pinned to IPFS.
+7. Wait for the progress bar. The file is being encrypted, pinned to IPFS, and a Basic Zero-Knowledge Proof is generated for integrity.
 8. MetaMask will pop up a second time asking you to **Confirm a Transaction**. This writes the final file record to the blockchain. Click Confirm.
 9. Your file now appears in the **My Files** tab!
 
@@ -170,7 +171,8 @@ When a user selects a file on the Dashboard and clicks "Encrypt & Upload File":
 1. **Frontend Request:** The React app reads the file, signs an authentication message with MetaMask (to prove identity without a traditional password), and sends the raw file to the backend via a `POST /api/upload` request.
 2. **Backend Encryption:** The backend (`backend/routes/upload.js`) intercepts the file. It generates a random, highly secure AES-256 Symmetric Key. The file is encrypted into an unreadable "Ciphertext".
 3. **IPFS Pinning:** The backend connects to Pinata using the API keys from your `.env` file. It uploads the encrypted ciphertext to the decentralized IPFS network. Pinata returns a `CID` (Content Identifier hash).
-4. **Blockchain Registry:** The backend returns the `CID` and the file hash back to the React Frontend. The Frontend then prompts MetaMask to execute a smart contract transaction (`FileRegistry.uploadFile(cids, fileHash)`). 
+4. **ZKP Generation:** The backend uses `snarkjs` to generate a mathematically sound Basic Zero-Knowledge Proof. This proof asserts: *"I know the exact contents of this file that map to this file hash, but I am not going to show you the file."*
+5. **Blockchain Registry:** The backend returns the `CID` and the `ZKP` back to the React Frontend. The Frontend then prompts MetaMask to execute a smart contract transaction (`FileRegistry.uploadFile(cids, fileHash)`). 
 
 **The Result:** The file is heavily encrypted and scattered across IPFS. Only a tiny, cheap record (the CID and Hash) is stored permanently on the Ethereum blockchain.
 

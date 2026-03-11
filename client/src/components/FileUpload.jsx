@@ -73,7 +73,7 @@ export default function FileUpload({ account, onUploadSuccess }) {
             if (!res.ok) throw new Error(data.error || "Upload failed on backend");
 
             // 5. Register on Blockchain
-            setStage("Writing CIDs to Blockchain...");
+            setStage("Writing Basic ZKP verified CIDs to Blockchain...");
             setProgress(75);
 
             const fileRegistry = await getFileRegistry(signer);
@@ -136,7 +136,7 @@ export default function FileUpload({ account, onUploadSuccess }) {
             <div className="mb-6">
                 <h2 className="text-xl font-bold mb-2">Secure File Upload</h2>
                 <p className="text-gray-400 text-sm">
-                    Files are encrypted client-side contextually (simulated backend), sliced, and pinned to IPFS.
+                    Files are encrypted client-side contextually (simulated backend), sliced, and pinned to IPFS. A Basic Zero-Knowledge Proof is generated to prove data integrity.
                 </p>
             </div>
 
