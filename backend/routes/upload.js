@@ -5,7 +5,6 @@ const router = express.Router();
 
 const encSvc = require("../services/encryptionService");
 const ipfsSvc = require("../services/ipfsService");
-const zkpSvc = require("../services/zkpService");
 const gdprSvc = require("../services/gdprService");
 const abeSvc = require("../services/abeService");
 
@@ -46,14 +45,7 @@ router.post("/", upload.single("file"), async (req, res) => {
             cids = encryptedChunks.map((_, i) => `Qm${fileHashHex.slice(0, 20)}chunk${i}`);
         }
 
-        // ── Stage 4: Generate ZKP ─────────────────────────────────────────────
-        const { proof, publicSignals } = await zkpSvc.generateFileIntegrityProof(
-            fileBuffer,
-            fileHashHex
-        );
-        const chainProof = zkpSvc.prepareProofForChain({ proof, publicSignals });
-
-        // ── Stage 5: Log to GDPR database ────────────────────────────────────
+        // ── Stage 4: Log to GDPR database ────────────────────────────────────
         const displayName = fileName || req.file.originalname || "unknown";
         gdprSvc.logUpload(
             userAddress.toLowerCase(),
@@ -71,10 +63,8 @@ router.post("/", upload.single("file"), async (req, res) => {
             authTags: authTags.map((t) => t.toString("hex")),
             abeShares: abeSvc.keyGen(masterKey, userAttrs, aesKey, 2),
             masterKeyHex: masterKey.toString("hex"), // WARNING: in production store server-side only
-            proof: chainProof,
-            publicSignals,
             message:
-                "File encrypted, uploaded to IPFS, and ZKP generated. Call FileRegistry.uploadFile() on-chain.",
+                "File encrypted and uploaded to IPFS. Call FileRegistry.uploadFile() on-chain.",
         });
     } catch (err) {
         console.error("[upload]", err);

@@ -122,8 +122,8 @@ export default function App() {
 
             {/* Footer */}
             <footer className="border-t border-cyber-900/30 bg-dark-900 py-6 text-center text-sm text-gray-500">
-                <p>Built with <span className="text-red-500">♥</span> using React, Solidity, snarkjs & IPFS.</p>
-                <p className="mt-1">Zero-Knowledge Proofs | Attribute-Based Encryption | GDPR Compliance</p>
+                <p>Built with <span className="text-red-500">♥</span> using React, Solidity & IPFS.</p>
+                <p className="mt-1">Attribute-Based Encryption | GDPR Compliance</p>
             </footer>
         </div>
     );

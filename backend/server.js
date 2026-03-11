@@ -9,7 +9,6 @@ const path = require("path");
 const uploadRoute = require("./routes/upload");
 const accessRoute = require("./routes/access");
 const gdprRoute = require("./routes/gdpr");
-const zkpRoute = require("./routes/zkp");
 
 // Services
 const gdprSvc = require("./services/gdprService");
@@ -46,7 +45,6 @@ try {
 app.use("/api/upload", uploadRoute);
 app.use("/api", accessRoute);           // /api/share and /api/access/:fileId
 app.use("/api/gdpr", gdprRoute);
-app.use("/api/zkp", zkpRoute);
 
 // ─────────────────────────── Health Check ────────────────────────────────
 
@@ -88,9 +86,6 @@ app.listen(PORT, () => {
     console.log("   GET  /api/gdpr/export      – GDPR Article 20 export");
     console.log("   POST /api/gdpr/consent     – Consent management");
     console.log("   GET  /api/gdpr/audit       – Access audit trail");
-    console.log("   POST /api/zkp/integrity    – Generate ZKP for file");
-    console.log("   POST /api/zkp/access       – Generate ZKP for access");
-    console.log("   POST /api/zkp/verify       – Verify ZKP off-chain");
     console.log("─".repeat(50));
 });
 

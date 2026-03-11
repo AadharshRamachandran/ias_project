@@ -35,7 +35,7 @@ export default function FileShare({ account, initialFileId = null }) {
 
         try {
             setIsSharing(true);
-            const toastId = toast.loading("Executing ABE key share and ZKP generation...");
+            const toastId = toast.loading("Executing ABE key share...");
 
             // 1. Format policy attributes
             const formattedAttrs = attributes
@@ -48,7 +48,7 @@ export default function FileShare({ account, initialFileId = null }) {
             const dummyAesKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
             const dummyMasterKeyHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
-            // 2. Call backend to perform ABE wrap and generate ZKP access proof
+            // 2. Call backend to perform ABE wrap
             const res = await fetch("/api/share", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -120,7 +120,6 @@ export default function FileShare({ account, initialFileId = null }) {
                 <h2 className="text-xl font-bold mb-2">Share File Access</h2>
                 <p className="text-gray-400 text-sm">
                     Grant time-limited access backed by CP-ABE (Ciphertext-Policy Attribute-Based Encryption).
-                    The recipient will need a Zero-Knowledge Proof to decrypt the file.
                 </p>
             </div>
 

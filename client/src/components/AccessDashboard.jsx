@@ -5,7 +5,6 @@ import {
     getFileRegistry,
     getAccessControl,
     getTimeBoundPermissions,
-    getZKPVerifier,
     signAuthMessage
 } from "../utils/blockchain";
 
@@ -76,7 +75,7 @@ export default function AccessDashboard({ account, onShareClick }) {
 
     const handleDownload = async (file) => {
         try {
-            const toastId = toast.loading("Verifying ZKP & ABE Policies...");
+            const toastId = toast.loading("Verifying ABE Policies...");
 
             const signer = await getSigner();
             const auth = await signAuthMessage(signer);
@@ -96,7 +95,6 @@ export default function AccessDashboard({ account, onShareClick }) {
                         "x-user-address": auth.address,
                         "x-signature": auth.signature,
                         "x-message": auth.message,
-                        "x-zkp-proof": "placeholder_zkp_proof",
                     },
                 }
             );

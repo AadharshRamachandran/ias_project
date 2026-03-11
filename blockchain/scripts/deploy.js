@@ -43,14 +43,6 @@ async function main() {
     const gdprAddr = await gdpr.getAddress();
     console.log("✅ GDPRCompliance deployed to:", gdprAddr);
 
-    // ── 5. ZKPVerifier ───────────────────────────────────────────────────
-    console.log("\n📦 Deploying ZKPVerifier...");
-    const ZKPVerifier = await ethers.getContractFactory("ZKPVerifier");
-    const zkpVerifier = await ZKPVerifier.deploy();
-    await zkpVerifier.waitForDeployment();
-    const zkpVerifierAddr = await zkpVerifier.getAddress();
-    console.log("✅ ZKPVerifier deployed to:", zkpVerifierAddr);
-
     // ── Save addresses ───────────────────────────────────────────────────
     const addresses = {
         network: "localhost",
@@ -61,7 +53,6 @@ async function main() {
             FileAccessControl: accessControlAddr,
             TimeBoundPermissions: timeBoundAddr,
             GDPRCompliance: gdprAddr,
-            ZKPVerifier: zkpVerifierAddr,
         },
     };
 

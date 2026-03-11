@@ -4,7 +4,6 @@ const router = express.Router();
 
 const encSvc = require("../services/encryptionService");
 const ipfsSvc = require("../services/ipfsService");
-const zkpSvc = require("../services/zkpService");
 const gdprSvc = require("../services/gdprService");
 const abeSvc = require("../services/abeService");
 
@@ -35,11 +34,6 @@ router.post("/share", async (req, res) => {
         const threshold = Math.max(1, Math.floor(recipAttrs.length / 2));
         const recipientKey = abeSvc.keyGen(masterKey, recipAttrs, aesKey, threshold);
 
-        // Generate access proof
-        const { proof, publicSignals, userCommitment, policyHash } =
-            await zkpSvc.generateAccessProof(recipAttrs, recipAttrs);
-        const chainProof = zkpSvc.prepareProofForChain({ proof, publicSignals });
-
         const expiryTs = Math.floor(Date.now() / 1000) + (expiryDurationSeconds || 3600);
 
         gdprSvc.logAccess(
@@ -55,9 +49,6 @@ router.post("/share", async (req, res) => {
             recipientAddress,
             expiryTimestamp: expiryTs,
             recipientKey,
-            userCommitment,
-            policyHash,
-            chainProof,
             message:
                 "ABE key generated. Call AccessControl.grantAccess() and TimeBoundPermissions.grantTimedAccess() on-chain.",
         });
@@ -75,7 +66,6 @@ router.get("/access/:fileId", async (req, res) => {
     try {
         const { fileId } = req.params;
         const userAddress = req.headers["x-user-address"];
-        const proofHeader = req.headers["x-zkp-proof"];
 
         if (!userAddress)
             return res.status(401).json({ error: "x-user-address header required" });
