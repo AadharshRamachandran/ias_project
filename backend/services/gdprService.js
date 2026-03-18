@@ -23,18 +23,23 @@ const DB_PATH = path.join(DB_DIR, "gdpr.db");
 
 let db;
 
-function getDb() {
-    if (!db) {
-        fs.mkdirSync(DB_DIR, { recursive: true });
-        db = new Database(DB_PATH);
-        initSchema();
+function ensureColumn(tableName, columnName, declarationSql) {
+    const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
+    const exists = cols.some((c) => String(c.name) === String(columnName));
+    if (!exists) {
+        db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${declarationSql}`);
     }
-    return db;
 }
 
+/**
+ * Opens the SQLite database and creates schema if needed.
+ * Called once at startup. Subsequent calls are no-ops.
+ */
 function initSchema() {
-    const database = getDb();
-    database.exec(`
+    if (db) return; // already initialised
+    fs.mkdirSync(DB_DIR, { recursive: true });
+    db = new Database(DB_PATH);
+    db.exec(`
     CREATE TABLE IF NOT EXISTS user_data_registry (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       userId           TEXT    NOT NULL,
@@ -77,7 +82,83 @@ function initSchema() {
       revokedAt        INTEGER,
       UNIQUE(userId, consentType)
     );
+
+    -- Stores encryption materials needed to decrypt an uploaded file.
+    -- NOTE: This is a demo-friendly approach; in production you would store these server-side
+    -- encrypted or via proper key management / recipient-specific wrapping.
+    CREATE TABLE IF NOT EXISTS file_materials (
+      fileId           TEXT PRIMARY KEY,
+      ownerAddress     TEXT NOT NULL,
+      cidsJson         TEXT NOT NULL,
+      aesKeyHex        TEXT NOT NULL,
+      ivsJson          TEXT NOT NULL,
+      authTagsJson     TEXT NOT NULL,
+      createdAt        INTEGER NOT NULL,
+      updatedAt        INTEGER NOT NULL
+    );
+
+        -- Group key management tables
+        CREATE TABLE IF NOT EXISTS groups (
+            groupId          TEXT PRIMARY KEY,
+            name             TEXT NOT NULL,
+            ownerAddress     TEXT NOT NULL,
+            currentKeyVersion INTEGER NOT NULL DEFAULT 1,
+            status           TEXT NOT NULL DEFAULT 'active',
+            createdAt        INTEGER NOT NULL,
+            updatedAt        INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS group_members (
+            groupId          TEXT NOT NULL,
+            userAddress      TEXT NOT NULL,
+            role             TEXT NOT NULL DEFAULT 'member',
+            status           TEXT NOT NULL DEFAULT 'active',
+            joinedAt         INTEGER NOT NULL,
+            PRIMARY KEY (groupId, userAddress)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_group_members_user
+            ON group_members(userAddress);
+
+        CREATE TABLE IF NOT EXISTS group_key_versions (
+            groupId          TEXT NOT NULL,
+            keyVersion       INTEGER NOT NULL,
+            groupKeyCipherB64 TEXT NOT NULL,
+            createdAt        INTEGER NOT NULL,
+            PRIMARY KEY (groupId, keyVersion)
+        );
+
+        CREATE TABLE IF NOT EXISTS file_group_shares (
+            fileId           TEXT NOT NULL,
+            groupId          TEXT NOT NULL,
+            ownerAddress     TEXT NOT NULL,
+            keyVersion       INTEGER NOT NULL,
+            wrappedFileKeyB64 TEXT NOT NULL,
+            cpabePolicy      TEXT,
+            cpabeCipherB64   TEXT,
+            expiryTimestamp  INTEGER NOT NULL,
+            status           TEXT NOT NULL DEFAULT 'active',
+            createdAt        INTEGER NOT NULL,
+            updatedAt        INTEGER NOT NULL,
+            PRIMARY KEY (fileId, groupId)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_file_group_shares_file
+            ON file_group_shares(fileId);
+
+        CREATE INDEX IF NOT EXISTS idx_file_group_shares_group
+            ON file_group_shares(groupId);
   `);
+
+    // Migration-safe column adds for existing databases created before CP-ABE fields.
+    ensureColumn("file_group_shares", "cpabePolicy", "TEXT");
+    ensureColumn("file_group_shares", "cpabeCipherB64", "TEXT");
+}
+
+/** Returns the open DB instance, initialising it if needed. */
+function getDb() {
+    if (!db) initSchema();
+    return db;
 }
 
 // ─────────────────────────── Uploads ─────────────────────────────────────
@@ -230,6 +311,7 @@ function anonymizeFileRecords(fileId) {
 
 module.exports = {
     initSchema,
+    getDb,
     logUpload,
     logAccess,
     requestErasure,

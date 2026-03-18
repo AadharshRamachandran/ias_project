@@ -1,6 +1,20 @@
-const { ethers } = require("hardhat");
+const { ethers, network } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
+
+const rpcUrl = process.env.HARDHAT_RPC_URL || "http://127.0.0.1:8545";
+const chainId = Number(process.env.HARDHAT_CHAIN_ID || network.config.chainId || 1337);
+const frontendUrl = process.env.VITE_FRONTEND_URL || `http://localhost:${process.env.VITE_FRONTEND_PORT || 5173}`;
+const configuredRbacAdminWallet = process.env.RBAC_ADMIN_WALLET || process.env.VITE_RBAC_ADMIN_WALLET || "";
+
+function normalizeAddress(address) {
+    if (!address) return "";
+    try {
+        return ethers.getAddress(address.trim());
+    } catch {
+        return "";
+    }
+}
 
 async function main() {
     const [deployer] = await ethers.getSigners();
@@ -26,6 +40,20 @@ async function main() {
     await accessControl.waitForDeployment();
     const accessControlAddr = await accessControl.getAddress();
     console.log("✅ FileAccessControl deployed to:", accessControlAddr);
+
+    // Optionally auto-whitelist an RBAC admin wallet as a trusted issuer.
+    // In strict mode, only trusted issuers can set role attributes.
+    const normalizedAdmin = normalizeAddress(configuredRbacAdminWallet);
+    if (configuredRbacAdminWallet && !normalizedAdmin) {
+        console.log("⚠️ RBAC_ADMIN_WALLET is set but invalid; skipping trusted issuer setup.");
+    } else if (normalizedAdmin && normalizedAdmin.toLowerCase() !== deployer.address.toLowerCase()) {
+        console.log(`\n🔐 Whitelisting RBAC admin wallet as trusted issuer: ${normalizedAdmin}`);
+        const txIssuer = await accessControl.setTrustedIssuer(normalizedAdmin, true);
+        await txIssuer.wait();
+        console.log("✅ Trusted issuer granted to RBAC admin wallet");
+    } else {
+        console.log("ℹ️ No additional RBAC admin wallet configured. Deployer remains trusted issuer by default.");
+    }
 
     // ── 3. TimeBoundPermissions ──────────────────────────────────────────
     console.log("\n📦 Deploying TimeBoundPermissions...");
@@ -53,9 +81,10 @@ async function main() {
 
     // ── Save addresses ───────────────────────────────────────────────────
     const addresses = {
-        network: "localhost",
-        chainId: 1337,
+        network: network.name || process.env.HARDHAT_NETWORK_NAME || "localhost",
+        chainId,
         deployedAt: new Date().toISOString(),
+        rbacAdminWallet: normalizeAddress(configuredRbacAdminWallet) || null,
         contracts: {
             FileRegistry: fileRegistryAddr,
             FileAccessControl: accessControlAddr,
@@ -99,10 +128,10 @@ async function main() {
     console.log("\n🎉 All contracts deployed successfully!");
     console.log("─".repeat(60));
     console.log("Next steps:");
-    console.log("  1. cd backend && node server.js");
+    console.log("  1. cd backend && npm run dev");
     console.log("  2. cd client && npm run dev");
-    console.log("  3. Open http://localhost:5173 in your browser");
-    console.log("  4. Connect MetaMask to http://localhost:8545 (Chain ID: 1337)");
+    console.log(`  3. Open ${frontendUrl} in your browser`);
+    console.log(`  4. Connect MetaMask to ${rpcUrl} (Chain ID: ${chainId})`);
 }
 
 main()

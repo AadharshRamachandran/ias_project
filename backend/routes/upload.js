@@ -3,27 +3,29 @@ const express = require("express");
 const multer = require("multer");
 const router = express.Router();
 
+const { authMiddleware } = require("../middleware/auth");
 const encSvc = require("../services/encryptionService");
 const ipfsSvc = require("../services/ipfsService");
 const zkpSvc = require("../services/zkpService");
 const gdprSvc = require("../services/gdprService");
-const abeSvc = require("../services/abeService");
+const materialsSvc = require("../services/materialsService");
+
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 /**
  * POST /api/upload
- * Encrypts file → uploads to IPFS → generates ZKP → returns metadata
+ * Requires authentication (x-user-address / x-signature / x-message headers).
+ * Encrypts file → uploads to IPFS → generates ZKP → stores materials server-side.
+ * The AES key is NEVER returned to the client; it is held in a server-side pending
+ * store keyed by fileHashHex.  The client must call /api/materials/register with
+ * { fileId, fileHashHex } to promote the pending record to a permanent one.
  */
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/", authMiddleware, upload.single("file"), async (req, res) => {
     try {
-        const { userAddress, attributes, fileName } = req.body;
+        const { fileName } = req.body;
+        const userAddress = req.verifiedAddress; // always use the cryptographically verified address
         if (!req.file) return res.status(400).json({ error: "No file provided" });
-        if (!userAddress) return res.status(400).json({ error: "userAddress required" });
-
-        const userAttrs = attributes
-            ? JSON.parse(attributes)
-            : ["role:user", "org:public"];
 
         // ── Stage 1: Encrypt ──────────────────────────────────────────────────
         const fileBuffer = req.file.buffer;
@@ -33,52 +35,73 @@ router.post("/", upload.single("file"), async (req, res) => {
         // SHA-256 of the plaintext file (for ZKP + on-chain storage)
         const fileHashHex = encSvc.sha256(fileBuffer);
 
-        // ── Stage 2: ABE-wrap the AES key ─────────────────────────────────────
-        const { masterKey, publicParams } = abeSvc.setup(2);
-        const abeCiphertext = abeSvc.encrypt(aesKey, userAttrs, masterKey, publicParams.threshold);
-
-        // ── Stage 3: Upload to IPFS ───────────────────────────────────────────
+        // ── Stage 2: Upload to IPFS ───────────────────────────────────────────
+        // Mock IPFS is NOT allowed in production. This ensures all files are persisted.
         let cids;
         try {
             cids = await ipfsSvc.uploadChunks(encryptedChunks);
         } catch (ipfsErr) {
-            console.warn("[upload] IPFS unavailable, using mock CIDs:", ipfsErr.message);
-            cids = encryptedChunks.map((_, i) => `Qm${fileHashHex.slice(0, 20)}chunk${i}`);
+            console.error("[upload] IPFS upload failed (no fallback allowed)");
+            return res.status(503).json({
+                error:
+                    "File storage (IPFS/Pinata) is unavailable. Verify PINATA_API_KEY, PINATA_API_SECRET, PINATA_GATEWAY environment variables and network connectivity, then retry.",
+            });
         }
 
-        // ── Stage 4: Generate ZKP ─────────────────────────────────────────────
+        // ── Stage 3: Generate ZKP ─────────────────────────────────────────────
         const { proof, publicSignals } = await zkpSvc.generateFileIntegrityProof(
             fileBuffer,
             fileHashHex
         );
         const chainProof = zkpSvc.prepareProofForChain({ proof, publicSignals });
 
+        // ── Stage 4: Store materials server-side (key never leaves backend) ───
+        const ivsHex = ivs.map((iv) => iv.toString("hex"));
+        const authTagsHex = authTags.map((t) => t.toString("hex"));
+        materialsSvc.storePendingMaterials(fileHashHex, {
+            ownerAddress: userAddress,
+            cids,
+            aesKeyHex: aesKey.toString("hex"),
+            ivs: ivsHex,
+            authTags: authTagsHex,
+        });
+
         // ── Stage 5: Log to GDPR database ────────────────────────────────────
         const displayName = fileName || req.file.originalname || "unknown";
         gdprSvc.logUpload(
-            userAddress.toLowerCase(),
+            userAddress,
             Date.now(), // fileId placeholder (real fileId from chain TX)
             displayName,
             "user-uploaded"
         );
 
+        // Return everything the frontend needs EXCEPT the AES key.
+        // The client must present fileHashHex to /api/materials/register after
+        // obtaining the on-chain fileId to link the pending record permanently.
         return res.json({
             success: true,
             cids,
             fileHashHex,
             hashes,
-            ivs: ivs.map((iv) => iv.toString("hex")),
-            authTags: authTags.map((t) => t.toString("hex")),
-            abeShares: abeSvc.keyGen(masterKey, userAttrs, aesKey, 2),
-            masterKeyHex: masterKey.toString("hex"), // WARNING: in production store server-side only
+            ivs: ivsHex,
+            authTags: authTagsHex,
             proof: chainProof,
             publicSignals,
             message:
-                "File encrypted, uploaded to IPFS, and Basic ZKP generated. Call FileRegistry.uploadFile() on-chain.",
+                "File encrypted with AES-256-GCM, uploaded to IPFS, ZKP generated. Call FileRegistry.uploadFile() on-chain, then POST /api/materials/register with { fileId, fileHashHex }.",
         });
     } catch (err) {
-        console.error("[upload]", err);
-        res.status(500).json({ error: err.message });
+        // Log error details for debugging but don't expose to client
+        if (err instanceof SyntaxError) {
+            console.error("[upload] Request validation error (malformed input)");
+            return res.status(400).json({ error: "Invalid request format" });
+        }
+        if (err.message.includes("File too large")) {
+            console.error("[upload] File size exceeded");
+            return res.status(413).json({ error: "File exceeds maximum size (100 MB)" });
+        }
+        console.error("[upload] Processing error (stack logged server-side)");
+        res.status(500).json({ error: "File upload processing failed. Please try again." });
     }
 });
 

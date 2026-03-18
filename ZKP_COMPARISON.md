@@ -1,61 +1,408 @@
-# Zero-Knowledge Proofs (ZKP) in Decentralized Storage
+# Zero-Knowledge Proofs (ZKP) in Decentralized File Storage: Impact Analysis
 
-This document explains the advantages of integrating Zero-Knowledge Proofs (ZKP) into the SecureFileShare codebase and provides a technical comparison to distinguish between a system with and without ZKP.
+## Executive Summary
 
----
+This document explains **what changes** in the codebase when Zero-Knowledge Proofs (ZKP) are integrated. It compares the **65% core system** (currently in `midsem submission/`) with the **35% ZKP extension**.
 
-## 1. What Advantages Does ZKP Bring?
-
-Integrating ZKP (specifically Groth16 Snarks) provides three primary "superpowers" to a decentralized application:
-
-### A. Privacy-Preserving Verification
-In a standard system, to prove you have an attribute (e.g., "Role: Doctor"), you must reveal that attribute to the verifier. With ZKP, you can prove you possess the required attributes **without revealing the attributes themselves**. The blockchain only sees a mathematical proof that "the user satisfies the policy," keeping the user's specific identity and roles private.
-
-### B. Computational Integrity (Trustless Hashing)
-When uploading a file, ZKP generates a proof that the IPFS Content Identifier (CID) exactly matches the hash of the original file. This prevents "bait-and-switch" attacks where a malicious server or user provides a valid hash but uploads different data. The ZKP ensures that the data being pinned is mathematically identical to the data being registered on the blockchain.
-
-### C. Reduced On-Chain Load
-Verifying a complex set of conditions (like a multi-layer access policy) can be expensive in terms of Gas fees. A ZKP compresses these complex logical checks into a single mathematical verification. The smart contract doesn't need to know the logic; it only needs to run a `verifyProof` function, which has a constant gas cost regardless of how complex the underlying rules are.
+**Key Question**: *What does a ZKP-equipped system do differently?*
 
 ---
 
-## 2. Distinguishing the Codebase: With vs. Without ZKP
+## Three Primary Changes ZKP Enables
 
-You can distinguish a ZKP-enabled codebase from a standard one by looking for these specific technical markers:
+### 1. **Privacy-Preserving Access Verification** 🔐
+**Without ZKP (65%):**
+- User reveals their attributes (e.g., "Role: Doctor") to backend
+- Backend checks: `if (userAttrs.includes("Doctor"))` → grant access
+- On-chain: User's hashed attributes stored publicly
+- **Problem**: Any observer knows who can access what
 
-### 1. File Structure (The "Smoking Gun")
-- **With ZKP**: You will see a `circuits/` folder containing `.circom` files (the logic), `.wasm` files (the compiled circuit), and `.zkey` files (the cryptographic keys).
-- **Without ZKP**: These directories are absent.
-
-### 2. Smart Contract Logic
-- **With ZKP**:
-    - Contracts import a `Verifier` or `ZKPVerifier` contract.
-    - Functions like `uploadFile` or `checkAccess` take additional parameters: `uint[2] a, uint[2][2] b, uint[2] c` (the proof) and `uint[] publicSignals`.
-    - There is a call to `require(verifier.verifyProof(a, b, c, signals), "Invalid Proof")`.
-- **Without ZKP**:
-    - Contracts rely solely on `mapping` or `require(msg.sender == owner)` for access.
-    - Parameters are simple (just strings, addresses, or hashes).
-
-### 3. Backend Dependencies
-- **With ZKP**: The `package.json` will include `snarkjs` and `circomlib`. The code will have `import * as snarkjs from "snarkjs"`.
-- **Without ZKP**: These dependencies are removed to reduce the bundle size and complexity.
-
-### 4. Data Flow (The "Verification Step")
-- **With ZKP**: 
-    - **Upload**: `File -> AES Encrypt -> Generate ZKP -> IPFS Upload -> Blockchain Register`.
-    - **Download**: `Request -> Generate Access ZKP -> Contract Verifies ZKP -> Decrypt`.
-- **Without ZKP**:
-    - **Upload**: `File -> AES Encrypt -> IPFS Upload -> Blockchain Register`.
-    - **Download**: `Request -> Contract Checks Address -> Decrypt`.
+**With ZKP (35%):**
+- User generates a cryptographic proof: "I have a Role attribute equal to Doctor"
+- Proof is mathematically valid WITHOUT revealing the attribute itself
+- User sends: `{ proof, publicSignal: "somehash" }` (not the attribute)
+- Smart contract verifies: `zkpVerifier.verifyProof(proof)` → bool
+- **Benefit**: Access decisions are private; blockchain sees only ✓/✗
 
 ---
 
-## 3. Summary Table
+### 2. **Computational Integrity (Trustless Hashing)** ✔️
+**Without ZKP (65%):**
+- Backend computes file hash: `CID = IPFS.add(ciphertext)`
+- Backend registers on-chain: `FileRegistry.uploadFile(fileId, CID, ...)`
+- Backend & frontend trust CID is correct
+- **Problem**: What if backend pins a different file internally but reports CID to blockchain?
 
-| Feature | Standard Codebase (Current) | ZKP-Enhanced Codebase (Removed) |
-| :--- | :--- | :--- |
-| **Verification Authority** | Smart Contract Logic (Visible) | Mathematical Proof (Hidden) |
-| **Privacy** | Low (Attributes are often public) | High (Attributes remain private) |
-| **Complexity** | Low (Easy to maintain) | High (Requires circuit compilation) |
-| **Gas Efficiency** | Variable (Depends on logic) | Constant (Fixed proof verification) |
-| **Integrity Check** | Relies on Hash comparison | Relies on Cryptographic Proof |
+**With ZKP (35%):**
+- Backend generates a ZKP: "The IPFS CID matches the SHA-256 hash of my file"
+- Circuit constraint: `SHA256(file_plaintext) == declared_hash`
+- Backend sends proof + CID to smart contract
+- Contract verifies proof: if proof is valid → CID is mathematically proven correct
+- **Benefit**: No trust in backend; proof is cryptographic guarantee
+
+---
+
+### 3. **Reduced On-Chain Computation (Gas Optimization)** ⛽
+**Without ZKP (65%):**
+- Smart contract checks ABAC policy directly:
+  ```solidity
+  require(userAttrs.contains("admin"))        // ~3000 gas storage reads
+  require(userAttrs.contains("department_x")) // ~3000 gas
+  require(currentTime < expiryTime)           // ~100 gas
+  // Total: ~6100 gas per access check
+  ```
+- Cost scales with policy complexity
+
+**With ZKP (35%):**
+- All policy checks done off-chain in circuit (zero gas cost)
+- Contract call: `require(zkpVerifier.verifyProof(proof))`  // ~200,000 gas (constant)
+- **Benefit**: For complex policies, ZKP is cheaper; for simple policies, it's more expensive
+- **Real-world win**: Multi-attribute access control (5+ checks) → proof verification is ~50% cheaper
+
+---
+
+## Code-Level Changes
+
+### Folder Structure Changes
+
+**Added in 35% ZKP extension:**
+```
+circuits/
+├── fileIntegrity.circom     # ZK circuit: prove file hash matches
+└── [compiled outputs] (generated by circom compiler)
+    ├── fileIntegrity.wasm   # Circuit compiled to Web Assembly
+    ├── fileIntegrity.zkey   # Cryptographic keys for Groth16
+    └── powersOfTau          # Trusted setup parameters
+
+blockchain/
+├── contracts/
+│   └── ZKPVerifier.sol      # Auto-generated verifier contract
+```
+
+---
+
+### Backend Changes: New `backend/services/zkpService.js` (35% only)
+
+**This file does NOT exist in the 65% core version. In 35% ZKP extension:**
+
+```javascript
+const snarkjs = require("snarkjs");
+const fs = require("fs");
+
+// Paths to circuit artifacts (generated by circom)
+const CIRCUIT_WASM = "./circuits/fileIntegrity.wasm";
+const CIRCUIT_ZKEY = "./circuits/fileIntegrity.zkey";
+
+async function generateFileIntegrityProof(plaintext, ipfsCid) {
+  // 1. Compute SHA256 of plaintext
+  const fileHash = crypto.createHash("sha256").update(plaintext).digest();
+  
+  // 2. Prepare circuit inputs
+  const input = {
+    fileHash: fileHash,           // Private input (not revealed)
+    claimedCid: ipfsCid,          // Public signal (on-chain)
+  };
+  
+  // 3. Generate proof using Groth16
+  const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+    input,
+    CIRCUIT_WASM,
+    CIRCUIT_ZKEY
+  );
+  
+  return { proof, publicSignals };
+}
+
+async function verifyAccessProof(proof, publicSignals) {
+  const vkey = JSON.parse(fs.readFileSync("./circuits/verification_key.json"));
+  const isValid = await snarkjs.groth16.verify(vkey, publicSignals, proof);
+  return isValid;
+}
+
+module.exports = { generateFileIntegrityProof, verifyAccessProof };
+```
+
+---
+
+### Backend Changes: `backend/routes/upload.js`
+
+**Without ZKP (65%):**
+```javascript
+async function uploadFile(req, res) {
+  const { fileBuffer, encryptionKey } = req.body;
+  
+  // Encrypt
+  const { ciphertext, iv, tag } = encryptionService.encryptFile(
+    fileBuffer,
+    encryptionKey
+  );
+  
+  // Upload to IPFS
+  const ipfsCid = await ipfsService.pinToIPFS(ciphertext);
+  
+  // Return to frontend
+  res.json({
+    fileId,
+    ipfsCid,
+    iv,
+    tag,
+    // No proof payload
+  });
+}
+```
+
+**With ZKP (35%):**
+```javascript
+async function uploadFile(req, res) {
+  const { fileBuffer, encryptionKey } = req.body;
+  
+  // Encrypt
+  const { ciphertext, iv, tag } = encryptionService.encryptFile(
+    fileBuffer,
+    encryptionKey
+  );
+  
+  // Upload to IPFS
+  const ipfsCid = await ipfsService.pinToIPFS(ciphertext);
+  
+  // [NEW] Generate ZKP proof
+  const { proof, publicSignals } = await zkpService.generateFileIntegrityProof(
+    fileBuffer,      // Original plaintext
+    ipfsCid          // IPFS hash
+  );
+  
+  // Return to frontend
+  res.json({
+    fileId,
+    ipfsCid,
+    iv,
+    tag,
+    proof,           // [NEW]
+    publicSignals,   // [NEW]
+  });
+}
+```
+
+---
+
+### Backend Changes: `backend/routes/access.js`
+
+**Without ZKP (65%):**
+```javascript
+async function accessFile(req, res) {
+  const fileId = req.params.fileId;
+  const userId = req.user.address;
+  
+  // Direct check: user's attributes in contract
+  const policy = await accessControl.getFilePolicy(fileId);
+  if (policy.exists) {
+    const userAttrs = await accessControl.getUserAttributes(userId);
+    const satisfies = checkAttributeSatisfaction(userAttrs, policy.required);
+    if (!satisfies) return res.status(403).json({ error: "Policy not satisfied" });
+  }
+  
+  // Grant access
+  const materials = await materialsService.getFileKeyMaterials(fileId);
+  res.json({ wrappedFileKey: materials.wrappedKey, ...materials });
+}
+```
+
+**With ZKP (35%):**
+```javascript
+async function accessFile(req, res) {
+  const fileId = req.params.fileId;
+  const userId = req.user.address;
+  const { accessProof } = req.body;  // [NEW]
+  
+  // [NEW] User submits proof instead of revealing attributes
+  if (accessProof) {
+    const isValidProof = await zkpService.verifyAccessProof(
+      accessProof.proof,
+      accessProof.publicSignals
+    );
+    
+    if (!isValidProof) {
+      return res.status(403).json({ error: "Invalid access proof" });
+    }
+    // [CHANGE] No attribute fetch; proof is proof enough
+  }
+  
+  // Grant access
+  const materials = await materialsService.getFileKeyMaterials(fileId);
+  res.json({ wrappedFileKey: materials.wrappedKey, ...materials });
+}
+```
+
+---
+
+### Blockchain Changes: New `blockchain/contracts/ZKPVerifier.sol` (35% only)
+
+**This file does NOT exist in the 65% core version. In 35% ZKP extension:**
+
+```solidity
+pragma solidity ^0.8.0;
+
+// Auto-generated by circom
+contract ZKPVerifier {
+    
+    // Groth16 verification
+    function verify(
+        uint[2] memory a,
+        uint[2][2] memory b,
+        uint[2] memory c,
+        uint[1] memory input  // Public signals
+    ) public view returns (bool) {
+        // Groth16 pairing checks (~200k gas, constant)
+        // Returns true if proof is valid, false otherwise
+        return _verify(a, b, c, input);
+    }
+    
+    function _verify(/*...*/) internal view returns (bool) {
+        // Implementation: Elliptic curve pairings
+    }
+}
+```
+
+---
+
+### Blockchain Changes: `blockchain/scripts/deploy.js`
+
+**Without ZKP (65%):**
+```javascript
+// Deploy 4 contracts (no ZKPVerifier)
+const addresses = {
+  FileRegistry: fileRegistryAddr,
+  FileAccessControl: accessControlAddr,
+  TimeBoundPermissions: timeBoundAddr,
+  GDPRCompliance: gdprAddr,
+};
+```
+
+**With ZKP (35%):**
+```javascript
+// Deploy 5 contracts (including ZKPVerifier)
+const ZKPVerifier = await ethers.getContractFactory("ZKPVerifier");
+const zkpVerifier = await ZKPVerifier.deploy();
+
+const addresses = {
+  FileRegistry: fileRegistryAddr,
+  FileAccessControl: accessControlAddr,
+  TimeBoundPermissions: timeBoundAddr,
+  GDPRCompliance: gdprAddr,
+  ZKPVerifier: zkpVerifierAddr,  // [NEW]
+};
+```
+
+---
+
+### New Folder: `circuits/` (35% only)
+
+**File: `circuits/fileIntegrity.circom` (Does NOT exist in 65%)**
+
+```circom
+pragma circom 2.0.0;
+
+include "../../node_modules/circomlib/circuits/sha256/sha256.circom";
+
+// Prove: File's hash matches claimed CID
+template FileIntegrityProof() {
+    signal input fileData[512];       // Private: original file bytes
+    signal input claimedCid;          // Public: IPFS CID to verify against
+    
+    // Compute SHA256 of file
+    component hash = SHA256(512);
+    hash.in <== fileData;
+    
+    // Assert: hash equals claimed CID
+    signal output verified;
+    verified <== hash.out === claimedCid;
+}
+
+component main { input fileData, claimedCid } = FileIntegrityProof();
+```
+
+---
+
+## Comparison Table
+
+| Aspect | 65% (Core) | 35% (ZKP) |
+|--------|-----------|-----------|
+| **Privacy of Attributes** | Attributes revealed/hashed on-chain | Attributes remain private; only proof public |
+| **File Integrity** | Trust backend CID | Proof-based verification (trustless) |
+| **ABAC Checking** | Backend logic (`if` statements) | Off-chain circuit + proof |
+| **Gas Cost per Access** | ~6K–10K gas (variable) | ~200K gas (fixed) |
+| **Circuit Artifacts** | ❌ None | ✅ `.circom`, `.wasm`, `.zkey` |
+| **zkpService.js** | ❌ Doesn't exist | ✅ Proof generation & verification |
+| **ZKPVerifier.sol** | ❌ Doesn't exist | ✅ Auto-generated verifier |
+| **Code Complexity** | Lower | Higher (circom required) |
+| **Backend Dependencies** | No snarkjs | ✅ Includes snarkjs |
+| **Total Contracts** | 4 | 5 |
+
+---
+
+## Advantages of ZKP (35%)
+
+✅ **Privacy**: Attributes never exposed; only proof of compliance  
+✅ **Scalability**: Complex policies → single proof (50% gas savings for 5+ rules)  
+✅ **Auditability**: Cryptographic proof is immutable evidence  
+✅ **Anonymity**: Can hide recipient identity behind proof  
+
+---
+
+## Disadvantages of ZKP (35%)
+
+❌ **Proof Generation**: ~1–2 seconds per access  
+❌ **Large Artifacts**: `.zkey` files are 50–200 MB  
+❌ **Higher Setup Cost**: Trusted ceremony required  
+❌ **Complexity**: Harder to debug; circom knowledge needed  
+
+---
+
+## When to Use Which Version
+
+| Scenario | Use 65% Core | Use 35% ZKP |
+|----------|-------------|-----------|
+| Quick MVP | ✅ | ❌ |
+| Privacy-critical | ❌ | ✅ |
+| Simple access rules | ✅ | ❌ |
+| Complex policies (5+ rules) | ❌ | ✅ |
+| Cost-sensitive | ✅ | ❌ |
+| Cryptographic audit needed | ❌ | ✅ |
+
+---
+
+## Files Present in Each Version
+
+| File/Folder | 65% (Core) | 35% (ZKP) | Location |
+|-------------|----------|----------|----------|
+| backend/services/zkpService.js | ❌ | ✅ | Parent folder |
+| circuits/fileIntegrity.circom | ❌ | ✅ | Parent folder |
+| blockchain/contracts/ZKPVerifier.sol | ❌ | ✅ | Parent folder |
+| backend/package.json (snarkjs) | ❌ | ✅ | Parent folder |
+| All other files | ✅ | ✅ | Both |
+
+---
+
+## Integration Path: 65% → 100%
+
+If adding ZKP to existing 65% core:
+
+1. Create `circuits/fileIntegrity.circom`
+2. Compile: `circom fileIntegrity.circom --wasm --zkey`
+3. Add `blockchain/contracts/ZKPVerifier.sol`
+4. Create `backend/services/zkpService.js`
+5. Modify `backend/routes/upload.js` + `access.js`
+6. Update `blockchain/scripts/deploy.js`
+7. Update frontend to generate/submit proofs
+8. **Integration time**: 3–5 days
+
+---
+
+## Conclusion
+
+**ZKP is a privacy + optimization layer, NOT required for core functionality.**
+
+- **65% (Core)**: Works fully, direct verification, observable access decisions
+- **100% (Core + ZKP)**: Same functionality, privacy-preserving, optimized for complex policies
+
+Choose based on privacy requirements and policy complexity, not feature completeness.

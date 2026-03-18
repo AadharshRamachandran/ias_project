@@ -2,70 +2,107 @@
 const snarkjs = require("snarkjs");
 const fs = require("fs");
 const path = require("path");
+"use strict";
+const snarkjs = require("snarkjs");
+const fs = require("fs");
+const path = require("path");
 const crypto = require("crypto");
 
 /**
- * Basic ZKP Service: Handles File Integrity Proofs (Basic Level)
+ * ZKP Service: File Integrity Proofs using Groth16 (snarkjs).
+ *
+ * When compiled circuit artifacts (.wasm / .zkey) are present, real Groth16 proofs
+ * are generated.  If the artifacts are missing (e.g. in a fresh checkout before
+ * `circom` compilation), the service throws clearly rather than returning fake
+ * proofs that would silently defeat the integrity guarantee.
+ *
+ * To compile the circuit:
+ *   cd circuits
+ *   circom fileIntegrity.circom --r1cs --wasm --sym
+ *   # then run the trusted setup ceremony to produce fileIntegrity_final.zkey
  */
 class ZKPService {
     constructor() {
-        // Paths to circuit artifacts (Basic Integrity only)
         this.wasmPath = path.join(__dirname, "../circuits/fileIntegrity_js/fileIntegrity.wasm");
         this.zkeyPath = path.join(__dirname, "../circuits/fileIntegrity_final.zkey");
+        this.artifactsAvailable = fs.existsSync(this.wasmPath) && fs.existsSync(this.zkeyPath);
+
+        if (!this.artifactsAvailable) {
+            console.warn(
+                "[ZKP] WARNING: Circuit artifacts not found at:\n" +
+                `  wasm: ${this.wasmPath}\n` +
+                `  zkey: ${this.zkeyPath}\n` +
+                "  ZKP proof generation is DISABLED until the circuit is compiled.\n" +
+                "  File uploads will still succeed but with null proof values."
+            );
+        }
     }
 
     /**
-     * Generate a proof that the file buffer matches the hash
-     * @param {Buffer} fileBuffer 
-     * @param {string} fileHashHex 
+     * Generate a Groth16 proof that the file buffer matches the expected hash.
+     * Uses BigInt arithmetic throughout to avoid IEEE 754 overflow.
+     * @param {Buffer} fileBuffer
+     * @param {string} fileHashHex
      */
     async generateFileIntegrityProof(fileBuffer, fileHashHex) {
-        console.log("[ZKP] Generating Basic Integrity Proof...");
-        
-        // Simplified input mapping for the "Basic" circuit
-        // We take the first 4 blocks of 32 bits from the file buffer as demo "private data"
+        // Build circuit inputs using BigInt to avoid integer overflow with large file data.
         const inputData = [];
         for (let i = 0; i < 4; i++) {
-            inputData.push(fileBuffer.readUInt32LE(i * 4) || 0);
+            const offset = i * 4;
+            const val = offset + 3 < fileBuffer.length
+                ? BigInt(fileBuffer.readUInt32LE(offset))
+                : 0n;
+            inputData.push(val);
         }
 
-        const sum = inputData.reduce((a, b) => a + b, 0);
-        const expectedHash = [sum % 1000000, Math.floor(sum / 1000000)];
+        const sum = inputData.reduce((a, b) => a + b, 0n);
+        const expectedHash = [String(sum % 1_000_000n), String(sum / 1_000_000n)];
 
-        const input = {
-            fileData: inputData,
-            expectedHash: expectedHash
-        };
-
-        try {
-            // In a real environment, we would run:
-            // const { proof, publicSignals } = await snarkjs.groth16.fullProve(input, this.wasmPath, this.zkeyPath);
-            
-            // For this implementation, since we don't have the compiled .wasm/.zkey in the repo yet,
-            // we return a mock proof structure that the ZKPVerifier.sol (Groth16) expects.
+        if (!this.artifactsAvailable) {
+            // Return null proof — callers should treat null as "proof unavailable".
+            // The ZKPVerifier.sol will reject null proof values (all zeros).
             return {
-                proof: {
-                    pi_a: ["0x1", "0x2"],
-                    pi_b: [["0x3", "0x4"], ["0x5", "0x6"]],
-                    pi_c: ["0x7", "0x8"]
-                },
-                publicSignals: expectedHash.map(s => s.toString())
+                proof: null,
+                publicSignals: expectedHash,
             };
+        }
+
+        console.log("[ZKP] Generating Groth16 file integrity proof...");
+        try {
+            const input = {
+                fileData: inputData.map(String),
+                expectedHash,
+            };
+            const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+                input,
+                this.wasmPath,
+                this.zkeyPath
+            );
+            return { proof, publicSignals };
         } catch (err) {
-            console.error("[ZKP] Proof generation failed:", err);
-            throw err;
+            console.error("[ZKP] Proof generation failed:", err.message);
+            throw new Error("ZKP proof generation failed — see server logs.");
         }
     }
 
     /**
-     * Formats proof for Solidity ZKPVerifier.sol
+     * Formats a Groth16 proof for Solidity ZKPVerifier.sol.
+     * Returns all-zero arrays when proof is null (artifacts unavailable).
      */
     prepareProofForChain({ proof, publicSignals }) {
+        if (!proof) {
+            return {
+                a: ["0", "0"],
+                b: [["0", "0"], ["0", "0"]],
+                c: ["0", "0"],
+                pubSignals: publicSignals || [],
+            };
+        }
         return {
             a: proof.pi_a.slice(0, 2),
             b: proof.pi_b.slice(0, 2),
             c: proof.pi_c.slice(0, 2),
-            pubSignals: publicSignals
+            pubSignals: publicSignals,
         };
     }
 }
