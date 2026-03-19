@@ -21,6 +21,10 @@ function hasAllPolicyAttributes(userAttrs, filePolicy) {
     return true;
 }
 
+function normalizeAddr(value) {
+    return String(value || "").trim().toLowerCase();
+}
+
 /**
  * POST /api/share
  * Grant file access: log share intent + time-bound metadata (on-chain calls delegated to frontend).
@@ -105,6 +109,11 @@ router.get("/access/:fileId", authMiddleware, async (req, res) => {
             path.join(ARTIFACTS_ROOT, "AccessControl.sol", "FileAccessControl.json"),
             provider
         );
+        const fileRegistry = getContractAt(
+            ADDRESSES.FileRegistry,
+            path.join(ARTIFACTS_ROOT, "FileRegistry.sol", "FileRegistry.json"),
+            provider
+        );
         const timeBound = getContractAt(
             ADDRESSES.TimeBoundPermissions,
             path.join(ARTIFACTS_ROOT, "TimeBoundPermissions.sol", "TimeBoundPermissions.json"),
@@ -113,14 +122,38 @@ router.get("/access/:fileId", authMiddleware, async (req, res) => {
         const allowed = await accessControl.checkAccess(userAddress, fileId);
         const filePolicy = await accessControl.getFilePolicy(fileId);
         const hasAttributePolicy = Array.isArray(filePolicy) && filePolicy.length > 0;
-        const chainOwner = String(await accessControl.getFileOwner(fileId) || "").toLowerCase();
-        const requester = userAddress.toLowerCase();
+        const fileGrantees = await accessControl.getFileGrantees(fileId);
+        const hasExplicitDirectGrants = Array.isArray(fileGrantees) && fileGrantees.length > 0;
+        const requester = normalizeAddr(userAddress);
+        const accessControlOwner = normalizeAddr(await accessControl.getFileOwner(fileId));
+        let fileRegistryOwner = "";
+        try {
+            const fileData = await fileRegistry.getFile(fileId);
+            fileRegistryOwner = normalizeAddr(fileData.owner);
+        } catch {
+            fileRegistryOwner = "";
+        }
+        const storedOwner = normalizeAddr(stored.ownerAddress);
+        const zeroAddr = "0x0000000000000000000000000000000000000000";
+        const isOwnerByAccessControl = accessControlOwner && accessControlOwner !== zeroAddr && accessControlOwner === requester;
+        const isOwnerByRegistry = fileRegistryOwner && fileRegistryOwner !== zeroAddr && fileRegistryOwner === requester;
+        const isOwnerByStoredMaterials = storedOwner && storedOwner === requester;
+        const isRequesterOwner = isOwnerByAccessControl || isOwnerByRegistry || isOwnerByStoredMaterials;
         let hasActiveTimedDirectAccess = false;
         if (allowed) {
             try {
                 hasActiveTimedDirectAccess = await timeBound.isAccessValid(userAddress, fileId);
             } catch {
                 hasActiveTimedDirectAccess = false;
+            }
+        }
+        let hasPolicyOnlyRoleAccess = false;
+        if (!allowed && hasAttributePolicy && !hasExplicitDirectGrants) {
+            try {
+                const userAttrs = await accessControl.getUserAttributes(userAddress);
+                hasPolicyOnlyRoleAccess = hasAllPolicyAttributes(userAttrs, filePolicy);
+            } catch {
+                hasPolicyOnlyRoleAccess = false;
             }
         }
 
@@ -132,9 +165,11 @@ router.get("/access/:fileId", authMiddleware, async (req, res) => {
         // Owner bypass: the file owner always has access to their own decryption materials.
         // This is checked first so a chain reset (which clears on-chain checkAccess state) never
         // locks the uploader out of their own files.
-        if (chainOwner && chainOwner === requester) {
+        if (isRequesterOwner) {
             aesKeyHexResolved = stored.aesKeyHex;
         } else if (allowed && hasActiveTimedDirectAccess) {
+            aesKeyHexResolved = stored.aesKeyHex;
+        } else if (hasPolicyOnlyRoleAccess) {
             aesKeyHexResolved = stored.aesKeyHex;
         } else {
             // Fallback: group key access path (server-managed group KEK + membership)

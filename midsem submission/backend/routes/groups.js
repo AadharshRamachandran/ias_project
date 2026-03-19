@@ -217,6 +217,13 @@ async function handleGroupShare(req, res, groupIdFromPath) {
             return res.status(403).json({ error: "Only file owner can share to groups" });
         }
 
+        const requesterGroups = groupSvc.listGroupsForUser(req.verifiedAddress);
+        const isActiveMember = requesterGroups.some((g) => g.groupId === String(groupId));
+        if (!isActiveMember) {
+            console.warn(`[groups/share] Authorization denied: user=${req.verifiedAddress} group=${groupId} reason=not_group_member`);
+            return res.status(403).json({ error: "Only active group members can share files to this group" });
+        }
+
         // Self-heal stale owner metadata without changing encrypted content.
         if (String(materials.ownerAddress || "").toLowerCase() !== chainOwner) {
             materialsSvc.upsertFileMaterials({
@@ -242,9 +249,17 @@ async function handleGroupShare(req, res, groupIdFromPath) {
         return res.json({
             success: true,
             share,
-            message: "Group share created. Active members can access until expiry.",
+            message: share.recoveredGroupKey
+                ? "Group share created. Group key was automatically recovered; previous active group shares were invalidated."
+                : "Group share created. Active members can access until expiry.",
         });
     } catch (err) {
+        if (String(err?.message || "").includes("Group key decryption failed")) {
+            console.error("[groups/share] Group key decryption failed (check GROUP_KMS_KEY_HEX consistency)");
+            return res.status(500).json({
+                error: "Group key decryption failed. Ensure GROUP_KMS_KEY_HEX is consistent with the key used when this group was created.",
+            });
+        }
         if (String(err?.message || "").includes("Contract") || String(err?.message || "").includes("RPC")) {
             console.error("[groups/share] Contract/RPC error (stack logged server-side)");
             return res.status(500).json({ error: "Contract verification failed. Check RPC connection." });

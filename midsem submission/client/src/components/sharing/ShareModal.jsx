@@ -29,8 +29,8 @@ const SHARE_MODELS = [
   {
     id: "direct-role",
     label: "Role-Based",
-    shortLabel: "Direct + ABAC",
-    description: "Direct wallet share with mandatory role/department policy",
+    shortLabel: "ABAC Policy",
+    description: "Share by role/department policy (no specific recipient wallet)",
     mode: "direct",
     requiresPolicy: true,
   },
@@ -53,67 +53,64 @@ const SHARE_MODELS = [
 ];
 
 // ─── Real-world access policy templates ──────────────────────────────────────────
-// Each template defines:
-//   policy    → attribute tags written to the FILE (definePolicy) — all must match
-//   recipient → bootstrap attributes stamped on the RECIPIENT (grantAccess)
-// The recipient will be granted access only when their on-chain attributes
-// satisfy every tag in the file policy.
+// Each template defines attribute tags written to the FILE policy (definePolicy).
+// Any user with matching on-chain attributes will be eligible for role-based access.
 const POLICY_TEMPLATES = [
   {
     id: "cardiologists",
     label: "Cardiologists only",
     emoji: "🪬",
     description: "Only doctors tagged with department:cardiology can open this file",
-    policy:    [{ key: "role", value: "doctor" }, { key: "department", value: "cardiology" }],
-    recipient: [{ key: "role", value: "doctor" }, { key: "department", value: "cardiology" }],
+    policy: [{ key: "role", value: "doctor" }, { key: "department", value: "cardiology" }],
+  },
+  {
+    id: "oncologists",
+    label: "Oncologists only",
+    emoji: "🩺",
+    description: "Only doctors tagged with department:oncology can open this file",
+    policy: [{ key: "role", value: "doctor" }, { key: "department", value: "oncology" }],
   },
   {
     id: "any-doctor",
     label: "Any registered doctor",
     emoji: "🏥",
     description: "Any wallet with role:doctor passes automatically",
-    policy:    [{ key: "role", value: "doctor" }],
-    recipient: [{ key: "role", value: "doctor" }],
+    policy: [{ key: "role", value: "doctor" }],
   },
   {
     id: "senior-lawyers",
     label: "Senior lawyers only",
     emoji: "⚖️",
     description: "Lawyers with clearance:senior — junior lawyers are blocked",
-    policy:    [{ key: "role", value: "lawyer" }, { key: "clearance", value: "senior" }],
-    recipient: [{ key: "role", value: "lawyer" }, { key: "clearance", value: "senior" }],
+    policy: [{ key: "role", value: "lawyer" }, { key: "clearance", value: "senior" }],
   },
   {
     id: "cs-professors",
     label: "CS professors only",
     emoji: "🎓",
     description: "Professors in the CS department — other departments are blocked",
-    policy:    [{ key: "role", value: "professor" }, { key: "department", value: "cs" }],
-    recipient: [{ key: "role", value: "professor" }, { key: "department", value: "cs" }],
+    policy: [{ key: "role", value: "professor" }, { key: "department", value: "cs" }],
   },
   {
     id: "senior-auditors",
     label: "Senior auditors only",
     emoji: "🔍",
     description: "Auditors with clearance:level-3 — level-1 auditors cannot access",
-    policy:    [{ key: "role", value: "auditor" }, { key: "clearance", value: "level-3" }],
-    recipient: [{ key: "role", value: "auditor" }, { key: "clearance", value: "level-3" }],
+    policy: [{ key: "role", value: "auditor" }, { key: "clearance", value: "level-3" }],
   },
   {
     id: "payroll-hr",
     label: "HR / Payroll managers",
     emoji: "💼",
     description: "HR managers with payroll clearance — regular employees are blocked",
-    policy:    [{ key: "role", value: "hr-manager" }, { key: "clearance", value: "payroll" }],
-    recipient: [{ key: "role", value: "hr-manager" }, { key: "clearance", value: "payroll" }],
+    policy: [{ key: "role", value: "hr-manager" }, { key: "clearance", value: "payroll" }],
   },
   {
     id: "executives",
     label: "Level-3 executives only",
     emoji: "🏢",
     description: "Top-level executives — managers and employees cannot access",
-    policy:    [{ key: "role", value: "executive" }, { key: "clearance", value: "level-3" }],
-    recipient: [{ key: "role", value: "executive" }, { key: "clearance", value: "level-3" }],
+    policy: [{ key: "role", value: "executive" }, { key: "clearance", value: "level-3" }],
   },
 ];
 
@@ -128,6 +125,15 @@ function hashAttributes(attrs) {
   return formatAttributes(attrs).map((attr) => ethers.utils.keccak256(ethers.utils.toUtf8Bytes(attr)));
 }
 
+function normalizeHash(value) {
+  return String(value || "").toLowerCase();
+}
+
+function userSatisfiesPolicy(userHashes, requiredHashes) {
+  const userSet = new Set((Array.isArray(userHashes) ? userHashes : []).map(normalizeHash));
+  return (Array.isArray(requiredHashes) ? requiredHashes : []).every((h) => userSet.has(normalizeHash(h)));
+}
+
 export default function ShareModal({ file, onClose, account }) {
   const [step, setStep] = useState(1);
   const [shareModel, setShareModel] = useState("direct-basic");
@@ -135,7 +141,6 @@ export default function ShareModal({ file, onClose, account }) {
   const [recipient, setRecipient] = useState("");
   const [expiry, setExpiry] = useState(86400);
   const [filePolicyAttrs, setFilePolicyAttrs] = useState([{ ...EMPTY_ATTR }]);
-  const [recipientAttrs, setRecipientAttrs] = useState([{ ...EMPTY_ATTR }]);
 
   const [groups, setGroups] = useState([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
@@ -162,9 +167,17 @@ export default function ShareModal({ file, onClose, account }) {
   const filePolicyTags = useMemo(() => formatAttributes(filePolicyAttrs), [filePolicyAttrs]);
   const shouldApplyPolicy = requiresPolicy && filePolicyTags.length > 0;
   const isDirectMode = mode === "direct";
+  const isDirectRoleMode = shareModel === "direct-role";
+  const requiresRecipient = isDirectMode && !isDirectRoleMode;
   const isGroupMode = mode === "group";
   const directProgressSteps = useMemo(
-    () => shouldApplyPolicy
+    () => isDirectRoleMode
+      ? [
+          { n: 1, label: "Writing ABAC file policy (AccessControl)..." },
+          { n: 2, label: "Resolving wallets with matching issued roles..." },
+          { n: 3, label: "Granting role-matched wallets and expiry windows..." },
+        ]
+      : shouldApplyPolicy
       ? [
           { n: 1, label: "Writing ABAC file policy (AccessControl)..." },
           { n: 2, label: "Granting direct access (AccessControl)..." },
@@ -174,7 +187,7 @@ export default function ShareModal({ file, onClose, account }) {
           { n: 1, label: "Granting direct access (AccessControl)..." },
           { n: 2, label: "Setting time-bound rules (TimeBoundPermissions)..." },
         ],
-    [shouldApplyPolicy]
+    [isDirectRoleMode, shouldApplyPolicy]
   );
   const groupProgressSteps = useMemo(
     () => shouldApplyPolicy
@@ -201,6 +214,11 @@ export default function ShareModal({ file, onClose, account }) {
       const next = current.filter((_, attrIndex) => attrIndex !== index);
       return next.length > 0 ? next : [{ ...EMPTY_ATTR }];
     });
+  };
+
+  const applyPolicyTemplate = (template) => {
+    setSelectedTemplate(template.id);
+    setFilePolicyAttrs(template.policy.map((attr) => ({ ...attr })));
   };
 
   const renderAttributeEditor = ({ title, subtitle, attrs, setter }) => (
@@ -275,23 +293,76 @@ export default function ShareModal({ file, onClose, account }) {
     }
   }, [isGroupMode]);
 
+  const resolveRoleRecipients = async (accessControl, requesterAddress, policyHashes) => {
+    const requester = String(requesterAddress || "").toLowerCase();
+    const filter = accessControl.filters.AttributesSet(null);
+    const events = await accessControl.queryFilter(filter, 0, "latest");
+
+    const seen = new Set();
+    const candidates = [];
+    for (const ev of events) {
+      const user = ev?.args?.user;
+      if (!user) continue;
+      const normalized = String(user).toLowerCase();
+      if (normalized === requester) continue;
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      candidates.push(user);
+    }
+
+    const matched = [];
+    for (const user of candidates) {
+      const attrs = await accessControl.getUserAttributes(user);
+      if (userSatisfiesPolicy(attrs, policyHashes)) {
+        matched.push(user);
+      }
+    }
+    return matched;
+  };
+
   const handleShareDirect = async () => {
     const signer = await getSigner();
     const accessControl = await getAccessControl(signer);
     const timeBound = await getTimeBoundPermissions(signer);
+    const requesterAddress = await signer.getAddress();
     const policyHashes = requiresPolicy ? hashAttributes(filePolicyAttrs) : [];
-    // Strict RBAC mode: role attributes are issued only by trusted issuers,
-    // so direct sharing no longer stamps recipient attributes.
-    const recipientHashes = [];
 
     let currentStep = 0;
 
-    if (policyHashes.length > 0) {
+    if (isDirectRoleMode || policyHashes.length > 0) {
+      if (policyHashes.length === 0) {
+        throw new Error("At least one role attribute is required for role-based sharing");
+      }
       currentStep = 1;
       setTxStatus({ step: currentStep, done: false, error: null });
       const txPolicy = await accessControl.definePolicy(file.id, policyHashes);
       await txPolicy.wait();
     }
+
+    if (isDirectRoleMode) {
+      currentStep = 2;
+      setTxStatus({ step: currentStep, done: false, error: null });
+      const recipients = await resolveRoleRecipients(accessControl, requesterAddress, policyHashes);
+      if (recipients.length === 0) {
+        throw new Error(
+          "No wallets found with matching on-chain role attributes. Ask admin/trusted issuer to assign roles in Settings first."
+        );
+      }
+
+      currentStep = 3;
+      setTxStatus({ step: currentStep, done: false, error: null });
+      for (const recipientAddress of recipients) {
+        const txGrant = await accessControl.grantAccess(file.id, recipientAddress, []);
+        await txGrant.wait();
+        const txTimed = await timeBound.grantTimedAccess(recipientAddress, file.id, expiry);
+        await txTimed.wait();
+      }
+
+      setTxStatus({ step: currentStep, done: true, error: null });
+      return { recipientsCount: recipients.length };
+    }
+
+    const recipientHashes = [];
 
     currentStep = policyHashes.length > 0 ? 2 : 1;
     setTxStatus({ step: currentStep, done: false, error: null });
@@ -304,6 +375,7 @@ export default function ShareModal({ file, onClose, account }) {
     await tx2.wait();
 
     setTxStatus({ step: currentStep, done: true, error: null });
+    return { recipientsCount: 1 };
   };
 
   const handleShareGroup = async () => {
@@ -345,7 +417,7 @@ export default function ShareModal({ file, onClose, account }) {
   };
 
   const handleShare = async () => {
-    if (isDirectMode && !recipient.match(/^0x[0-9a-fA-F]{40}$/)) {
+    if (requiresRecipient && !recipient.match(/^0x[0-9a-fA-F]{40}$/)) {
       toast.error("Enter a valid recipient wallet address");
       return;
     }
@@ -361,8 +433,12 @@ export default function ShareModal({ file, onClose, account }) {
     setIsSharing(true);
     try {
       if (isDirectMode) {
-        await handleShareDirect();
-        toast.success(`File shared with ${recipient.slice(0, 8)}...`);
+        const result = await handleShareDirect();
+        toast.success(
+          isDirectRoleMode
+            ? `Role-based file shared to ${result?.recipientsCount || 0} matching wallet(s)`
+            : `File shared with ${recipient.slice(0, 8)}...`
+        );
       } else {
         await handleShareGroup();
         toast.success(`File shared to group ${selectedGroup?.name || ""}`);
@@ -424,7 +500,7 @@ export default function ShareModal({ file, onClose, account }) {
                 ))}
               </div>
 
-              {isDirectMode ? (
+              {requiresRecipient ? (
                 <div>
                   <h3 className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
                     <User className="w-4 h-4 text-electric-500" /> Recipient wallet
@@ -437,6 +513,15 @@ export default function ShareModal({ file, onClose, account }) {
                     onChange={(e) => setRecipient(e.target.value)}
                     autoFocus
                   />
+                </div>
+              ) : isDirectRoleMode ? (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
+                    <Key className="w-4 h-4 text-electric-500" /> Role policy (ABAC)
+                  </h3>
+                  <p className="text-xs text-gray-400">
+                    Define required roles/attributes. Access is evaluated from trusted issuer-assigned attributes.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -504,6 +589,28 @@ export default function ShareModal({ file, onClose, account }) {
                 ))}
               </div>
 
+              {requiresPolicy && (
+                <div className="rounded-xl border border-gray-100 bg-white p-4 space-y-3">
+                  <div className="text-xs font-semibold text-gray-700">Quick role templates</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {POLICY_TEMPLATES.map((template) => (
+                      <button
+                        key={template.id}
+                        onClick={() => applyPolicyTemplate(template)}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          selectedTemplate === template.id
+                            ? "border-electric-500 bg-electric-50"
+                            : "border-gray-200 hover:border-electric-300"
+                        }`}
+                      >
+                        <div className="text-sm font-semibold text-gray-800">{template.emoji} {template.label}</div>
+                        <div className="text-xs text-gray-500 mt-1">{template.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {requiresPolicy ? renderAttributeEditor({
                 title: "ABAC File Policy",
                 subtitle: "Required for this sharing option. Users must match all listed attributes.",
@@ -516,7 +623,7 @@ export default function ShareModal({ file, onClose, account }) {
                 </div>
               )}
 
-              {isDirectMode && (
+              {requiresRecipient && (
                 <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
                   <div className="text-xs font-semibold text-gray-700">Recipient Role Assignment</div>
                   <div className="text-xs text-gray-500 mt-1">
@@ -539,8 +646,10 @@ export default function ShareModal({ file, onClose, account }) {
                 <div className="flex items-center justify-between px-4 py-3">
                   <span className="text-xs text-gray-400">Target</span>
                   <span className="text-xs font-medium text-gray-800 font-mono">
-                    {isDirectMode
+                    {requiresRecipient
                       ? `${recipient.slice(0, 16)}...${recipient.slice(-8)}`
+                      : isDirectRoleMode
+                        ? "Any user matching policy"
                       : `${selectedGroup?.name || "-"} (${selectedGroup?.memberCount || 0} members)`}
                   </span>
                 </div>
@@ -556,7 +665,7 @@ export default function ShareModal({ file, onClose, account }) {
                       : "Disabled"}
                   </span>
                 </div>
-                {isDirectMode && (
+                {requiresRecipient && (
                   <div className="px-4 py-3">
                     <div className="text-xs text-gray-400">Recipient Attributes</div>
                     <div className="text-xs font-medium text-gray-800 mt-0.5">
@@ -616,7 +725,7 @@ export default function ShareModal({ file, onClose, account }) {
             <button
               onClick={() => setStep((s) => s + 1)}
               disabled={
-                (step === 1 && ((isDirectMode && !recipient.match(/^0x[0-9a-fA-F]{40}$/)) || (isGroupMode && !selectedGroupId))) ||
+                (step === 1 && ((requiresRecipient && !recipient.match(/^0x[0-9a-fA-F]{40}$/)) || (isGroupMode && !selectedGroupId))) ||
                 (step === 2 && requiresPolicy && filePolicyTags.length === 0)
               }
               className="btn-primary flex items-center gap-2"

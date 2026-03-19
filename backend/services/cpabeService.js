@@ -6,6 +6,9 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
+let runtimeCpabeDisabled = false;
+let runtimeDisableReason = "";
+
 function isTruthyEnv(name) {
     const value = String(process.env[name] || "").toLowerCase();
     return value === "1" || value === "true" || value === "yes";
@@ -49,7 +52,19 @@ function attrFromAddress(address) {
 
 function isEnabled() {
     const v = String(process.env.CPABE_ENABLED || "false").toLowerCase();
-    return v !== "false" && v !== "0";
+    const enabledByEnv = v !== "false" && v !== "0";
+    return enabledByEnv && !runtimeCpabeDisabled;
+}
+
+function isMissingBinaryError(err) {
+    const msg = String(err?.message || "").toLowerCase();
+    return msg.includes("enoent") || msg.includes("failed to start") || msg.includes("install cpabe binaries");
+}
+
+function disableCpabeRuntime(err) {
+    runtimeCpabeDisabled = true;
+    runtimeDisableReason = String(err?.message || "CP-ABE runtime disabled");
+    console.warn(`[cpabe] Runtime disabled: ${runtimeDisableReason}`);
 }
 
 function cpabePaths() {
@@ -140,7 +155,16 @@ function encryptAesKeyHexForPolicy(aesKeyHex, policyExpr) {
     if (!/^[0-9a-f]{64}$/i.test(String(aesKeyHex || ""))) {
         throw new Error("AES key must be 64 hex characters for CP-ABE encryption");
     }
-    const p = ensureSetup();
+    let p;
+    try {
+        p = ensureSetup();
+    } catch (err) {
+        if (isMissingBinaryError(err)) {
+            disableCpabeRuntime(err);
+            return null;
+        }
+        throw err;
+    }
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cpabe-enc-"));
     const plainPath = path.join(tmpDir, `${crypto.randomUUID()}.txt`);
@@ -170,7 +194,16 @@ function decryptAesKeyHexWithAttributes(cipherB64, attributes) {
         throw new Error("At least one CP-ABE attribute is required for decryption");
     }
 
-    const p = ensureSetup();
+    let p;
+    try {
+        p = ensureSetup();
+    } catch (err) {
+        if (isMissingBinaryError(err)) {
+            disableCpabeRuntime(err);
+            return null;
+        }
+        throw err;
+    }
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cpabe-dec-"));
     const encPath = path.join(tmpDir, `${crypto.randomUUID()}.cpabe`);
     const outPath = encPath.replace(/\.cpabe$/i, "");
@@ -204,4 +237,5 @@ module.exports = {
     groupMemberPolicy,
     encryptAesKeyHexForPolicy,
     decryptAesKeyHexWithAttributes,
+    getRuntimeDisableReason: () => runtimeDisableReason,
 };

@@ -83,6 +83,11 @@ function openGroupKey(cipherB64) {
     return Buffer.concat([decipher.update(enc), decipher.final()]);
 }
 
+function isGcmAuthFailure(err) {
+    const msg = String(err?.message || "").toLowerCase();
+    return msg.includes("unable to authenticate data") || msg.includes("unsupported state");
+}
+
 function wrapFileKeyWithGroupKey(fileKey, groupKey) {
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv("aes-256-gcm", groupKey, iv);
@@ -143,6 +148,27 @@ function ensureOwner(groupId, requesterAddress) {
     return g;
 }
 
+function ensureActiveMember(groupId, requesterAddress) {
+    const g = getGroupById(groupId);
+    if (!g) throw new Error("Group not found");
+    if (g.status !== "active") throw new Error("Group is not active");
+
+    const db = gdprSvc.getDb();
+    const membership = db
+        .prepare(
+            `SELECT status
+             FROM group_members
+             WHERE groupId = ? AND userAddress = ?`
+        )
+        .get(String(groupId), addr(requesterAddress));
+
+    if (!membership || membership.status !== "active") {
+        throw new Error("Only active group members can share files to this group");
+    }
+
+    return g;
+}
+
 function getGroupKey(groupId, version) {
     const db = gdprSvc.getDb();
     const row = db
@@ -154,7 +180,55 @@ function getGroupKey(groupId, version) {
         .get(String(groupId), Number(version));
 
     if (!row) throw new Error("Group key version not found");
-    return openGroupKey(row.groupKeyCipherB64);
+    try {
+        return openGroupKey(row.groupKeyCipherB64);
+    } catch (err) {
+        if (isGcmAuthFailure(err)) {
+            throw new Error(
+                "Group key decryption failed. The server KMS key may have changed since this group was created."
+            );
+        }
+        throw err;
+    }
+}
+
+function recoverGroupKeyForWrites(groupId) {
+    const db = gdprSvc.getDb();
+    const nextVersionRow = db
+        .prepare(
+            `SELECT COALESCE(MAX(keyVersion), 0) + 1 AS nextVersion
+             FROM group_key_versions
+             WHERE groupId = ?`
+        )
+        .get(String(groupId));
+
+    const nextVersion = Number(nextVersionRow?.nextVersion || 1);
+    const newGroupKey = crypto.randomBytes(32);
+    const sealed = sealGroupKey(newGroupKey);
+    const ts = nowMs();
+
+    runInTransaction(db, () => {
+        db.prepare(
+            `INSERT INTO group_key_versions (groupId, keyVersion, groupKeyCipherB64, createdAt)
+             VALUES (?, ?, ?, ?)`
+        ).run(String(groupId), nextVersion, sealed, ts);
+
+        db.prepare(
+            `UPDATE groups
+             SET currentKeyVersion = ?, updatedAt = ?
+             WHERE groupId = ?`
+        ).run(nextVersion, ts, String(groupId));
+
+        // Existing shares tied to broken key material are deactivated to avoid
+        // repeated decryption failures for recipients.
+        db.prepare(
+            `UPDATE file_group_shares
+             SET status = 'inactive', updatedAt = ?
+             WHERE groupId = ? AND status = 'active'`
+        ).run(ts, String(groupId));
+    });
+
+    return { groupKey: newGroupKey, keyVersion: nextVersion, recovered: true };
 }
 
 function rotateGroupKey(groupId, requesterAddress) {
@@ -323,11 +397,24 @@ function removeMember({ groupId, requesterAddress, memberAddress }) {
 
 function shareFileToGroup({ groupId, fileId, ownerAddress, aesKeyHex, expiryDurationSeconds }) {
     const db = gdprSvc.getDb();
-    const group = ensureOwner(groupId, ownerAddress);
+    const group = ensureActiveMember(groupId, ownerAddress);
     if (!aesKeyHex || typeof aesKeyHex !== "string") throw new Error("aesKeyHex required");
 
-    const keyVersion = Number(group.currentKeyVersion || 1);
-    const groupKey = getGroupKey(groupId, keyVersion);
+    let keyVersion = Number(group.currentKeyVersion || 1);
+    let groupKey;
+    let recoveredGroupKey = false;
+    try {
+        groupKey = getGroupKey(groupId, keyVersion);
+    } catch (err) {
+        if (String(err?.message || "").includes("Group key decryption failed")) {
+            const recovered = recoverGroupKeyForWrites(groupId);
+            keyVersion = recovered.keyVersion;
+            groupKey = recovered.groupKey;
+            recoveredGroupKey = true;
+        } else {
+            throw err;
+        }
+    }
     const fileKey = Buffer.from(aesKeyHex, "hex");
     const wrappedFileKeyB64 = wrapFileKeyWithGroupKey(fileKey, groupKey);
     const members = listGroupMembers(groupId)
@@ -378,6 +465,7 @@ function shareFileToGroup({ groupId, fileId, ownerAddress, aesKeyHex, expiryDura
         keyVersion,
         expiryTimestamp: expiry,
         memberCount,
+        recoveredGroupKey,
     };
 }
 
@@ -405,10 +493,17 @@ function resolveGroupAccessForUser(fileId, userAddress) {
 
     let aesKeyHex;
     if (cpabeSvc.isEnabled() && row.cpabeCipherB64) {
-        aesKeyHex = cpabeSvc.decryptAesKeyHexWithAttributes(row.cpabeCipherB64, [
-            cpabeSvc.attrFromAddress(userAddress),
-        ]);
-    } else {
+        try {
+            aesKeyHex = cpabeSvc.decryptAesKeyHexWithAttributes(row.cpabeCipherB64, [
+                cpabeSvc.attrFromAddress(userAddress),
+            ]);
+        } catch (err) {
+            console.warn(`[group-share] CP-ABE decrypt failed, falling back to wrapped key path: ${err.message}`);
+            aesKeyHex = null;
+        }
+    }
+
+    if (!aesKeyHex) {
         const groupKey = getGroupKey(row.groupId, row.keyVersion);
         const fileKey = unwrapFileKeyWithGroupKey(row.wrappedFileKeyB64, groupKey);
         aesKeyHex = fileKey.toString("hex");
